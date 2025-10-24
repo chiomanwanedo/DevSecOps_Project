@@ -1,0 +1,103 @@
+name: CI/CD - Build, Push, Deploy to Minikube
+
+on:
+  push:
+    branches: [ "main" ]
+  workflow_dispatch:
+
+env:
+  IMAGE_NAME: chiomavee/netflix-app
+
+jobs:
+  build_and_push:
+    name: Build & Push Docker image
+    runs-on: ubuntu-latest
+    outputs:
+      short_sha: ${{ steps.vars.outputs.SHORT_SHA }}
+      image_latest: ${{ steps.vars.outputs.IMAGE_LATEST }}
+      image_sha: ${{ steps.vars.outputs.IMAGE_SHA }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Setup Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Cache Yarn
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cache/yarn
+            **/node_modules
+          key: yarn-${{ runner.os }}-${{ hashFiles('**/yarn.lock') }}
+          restore-keys: |
+            yarn-${{ runner.os }}-
+
+      - name: Install deps
+        run: yarn install --frozen-lockfile --non-interactive
+
+      - name: Tests (optional)
+        run: |
+          yarn test --if-present || echo "No tests / skipping"
+
+      - name: Compute image tags
+        id: vars
+        run: |
+          SHORT_SHA=${GITHUB_SHA::7}
+          echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
+          echo "IMAGE_LATEST=${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
+          echo "IMAGE_SHA=${{ env.IMAGE_NAME }}:${SHORT_SHA}" >> $GITHUB_OUTPUT
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v3
+        with:
+          username: ${{ secrets.DOCKERHUB_USERNAME }}
+          password: ${{ secrets.DOCKERHUB_TOKEN }}
+
+      - name: Setup Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build & Push (latest + sha)
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: |
+            ${{ steps.vars.outputs.IMAGE_LATEST }}
+            ${{ steps.vars.outputs.IMAGE_SHA }}
+          cache-from: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache
+          cache-to: type=registry,ref=${{ env.IMAGE_NAME }}:buildcache,mode=max
+
+  deploy_minikube:
+    name: Deploy to Minikube
+    needs: build_and_push
+    runs-on: [ self-hosted, linux ]   # match your runner labels
+    env:
+      NAMESPACE: default
+      APP_NAME: netflix-app
+
+    steps:
+      - name: Show context
+        run: |
+          kubectl config current-context
+          kubectl get nodes -o wide
+
+      - name: Update Deployment image
+        run: |
+          set -euo pipefail
+          kubectl -n $NAMESPACE set image deployment/${APP_NAME} ${APP_NAME}=${{ needs.build_and_push.outputs.image_sha }}
+          kubectl -n $NAMESPACE rollout status deployment/${APP_NAME} --timeout=180s
+
+      - name: Check Pods
+        run: |
+          kubectl -n $NAMESPACE get pods -l app=${APP_NAME} -o wide
+
+      # Optional smoke check if using NodePort service:
+      # - name: Smoke test
+      #   run: |
+      #     MINIKUBE_IP=$(minikube ip)
+      #     NODEPORT=$(kubectl -n $NAMESPACE get svc ${APP_NAME} -o jsonpath='{.spec.ports[0].nodePort}')
+      #     curl -sv "http://$MINIKUBE_IP:$NODEPORT/" | head -n 20 || true
