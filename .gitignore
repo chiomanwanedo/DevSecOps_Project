@@ -26,3 +26,39 @@ npm-debug.log*
 yarn.lock
 yarn-debug.log*
 yarn-error.log*
+
+# Logs & OS
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+
+# Node / Frontend
+node_modules/
+dist/
+build/
+.next/
+out/
+coverage/
+.cache/
+.pnpm-store/
+.turbo/
+
+# Env / local
+.env
+.env.*
+*.local
+
+# DevOps / IaC caches
+.terraform/
+.terraform.lock.hcl
+terraform.tfstate
+terraform.tfstate.*
+
+# Docker
+**/.venv/
+**/__pycache__/
+
+# Self-hosted runner noise
+actions-runner/_diag/*.log
