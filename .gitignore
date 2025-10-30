@@ -62,3 +62,5 @@ terraform.tfstate.*
 
 # Self-hosted runner noise
 actions-runner/_diag/*.log
+
+actions-runner/
