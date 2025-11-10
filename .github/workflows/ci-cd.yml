@@ -5,8 +5,16 @@ on:
     branches: [ "main" ]
   workflow_dispatch:
 
+permissions:
+  contents: read
+  packages: read
+
+concurrency:
+  group: netflix-app-${{ github.ref }}
+  cancel-in-progress: false
+
 env:
-  IMAGE_NAME: chiomavee/netflix-app
+  IMAGE_NAME: chiomavee/netflix-app   # <- ensure this matches your Docker Hub repo
 
 jobs:
   build_and_push:
@@ -50,6 +58,7 @@ jobs:
           echo "SHORT_SHA=$SHORT_SHA" >> $GITHUB_OUTPUT
           echo "IMAGE_LATEST=${{ env.IMAGE_NAME }}:latest" >> $GITHUB_OUTPUT
           echo "IMAGE_SHA=${{ env.IMAGE_NAME }}:${SHORT_SHA}" >> $GITHUB_OUTPUT
+          echo "Will push: ${{ env.IMAGE_NAME }}:latest and ${{ env.IMAGE_NAME }}:${SHORT_SHA}"
 
       - name: Login to Docker Hub
         uses: docker/login-action@v3
@@ -74,30 +83,51 @@ jobs:
   deploy_minikube:
     name: Deploy to Minikube
     needs: build_and_push
-    runs-on: [self-hosted, Linux, X64]   # match your runner labels
+    runs-on: [self-hosted, Linux, X64]  # your runner connected to Minikube
     env:
       NAMESPACE: default
-      APP_NAME: netflix-app
+      APP_NAME: netflix-app                           # must equal your container name in the Deployment
+      IMAGE_SHA: ${{ needs.build_and_push.outputs.image_sha }}
 
     steps:
-      - name: Show context
+      - name: Show kubectl context & nodes
         run: |
+          set -euo pipefail
           kubectl config current-context
           kubectl get nodes -o wide
+
+      - name: Validate image output
+        run: |
+          set -euo pipefail
+          echo "IMAGE_SHA='${IMAGE_SHA}'"
+          test -n "${IMAGE_SHA}" || { echo "ERROR: IMAGE_SHA is empty. Check build_and_push job outputs/logs."; exit 1; }
+
+      - name: Ensure Deployment exists & print current image(s)
+        run: |
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" get deploy "$APP_NAME" || { echo "Deployment '$APP_NAME' not found in ns '$NAMESPACE'"; exit 1; }
+          echo "Current container images:"
+          kubectl -n "$NAMESPACE" get deploy "$APP_NAME" -o jsonpath='{range .spec.template.spec.containers[*]}{.name}{" -> "}{.image}{"\n"}{end}'
 
       - name: Update Deployment image
         run: |
           set -euo pipefail
-          kubectl -n $NAMESPACE set image deployment/${APP_NAME} ${APP_NAME}=${{ needs.build_and_push.outputs.image_sha }}
-          kubectl -n $NAMESPACE rollout status deployment/${APP_NAME} --timeout=180s
+          echo "Patching $APP_NAME -> ${IMAGE_SHA}"
+          kubectl -n "$NAMESPACE" set image deployment/"$APP_NAME" "$APP_NAME"="${IMAGE_SHA}" --record
+          kubectl -n "$NAMESPACE" rollout status deployment/"$APP_NAME" --timeout=180s
 
-      - name: Check Pods
+      - name: Check Pods & deployed image
         run: |
-          kubectl -n $NAMESPACE get pods -l app=${APP_NAME} -o wide
+          set -euo pipefail
+          kubectl -n "$NAMESPACE" get pods -l app="${APP_NAME}" -o wide
+          echo -e "\nDeployed image is now:"
+          kubectl -n "$NAMESPACE" get deploy "$APP_NAME" -o jsonpath='{.spec.template.spec.containers[0].image}{"\n"}'
 
-      # Optional smoke check if using NodePort service:
+      # Optional: smoke test if you expose via NodePort
       # - name: Smoke test
       #   run: |
+      #     set -euo pipefail
       #     MINIKUBE_IP=$(minikube ip)
-      #     NODEPORT=$(kubectl -n $NAMESPACE get svc ${APP_NAME} -o jsonpath='{.spec.ports[0].nodePort}')
-      #     curl -sv "http://$MINIKUBE_IP:$NODEPORT/" | head -n 20 || true
+      #     NODEPORT=$(kubectl -n "$NAMESPACE" get svc "$APP_NAME" -o jsonpath='{.spec.ports[0].nodePort}')
+      #     echo "Hitting http://$MINIKUBE_IP:$NODEPORT/"
+      #     curl -sv "http://$MINIKUBE_IP:$NODEPORT/" | head -n 50 || true
