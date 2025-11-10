@@ -74,7 +74,7 @@ jobs:
   deploy_minikube:
     name: Deploy to Minikube
     needs: build_and_push
-    runs-on: [ self-hosted, linux ]   # match your runner labels
+    runs-on: [self-hosted, Linux, X64]   # match your runner labels
     env:
       NAMESPACE: default
       APP_NAME: netflix-app
