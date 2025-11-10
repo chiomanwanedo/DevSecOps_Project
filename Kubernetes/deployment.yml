@@ -6,6 +6,12 @@ metadata:
     app: netflix-app
 spec:
   replicas: 2
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate:
+      maxUnavailable: 0
+      maxSurge: 1
   selector:
     matchLabels:
       app: netflix-app
@@ -15,7 +21,32 @@ spec:
         app: netflix-app
     spec:
       containers:
-      - name: netflix-app
-        image: chiomavee/netflix:latest
-        ports:
-        - containerPort: 80
+        - name: netflix-app
+          image: chiomavee/netflix-app:latest   # CI will later set this to :<SHORT_SHA>
+          imagePullPolicy: Always
+          ports:
+            - containerPort: 80                # <-- change to 3000 if your app listens on 3000
+          # If your app serves "/" OK, these probes help rollouts be safe.
+          readinessProbe:
+            httpGet:
+              path: /
+              port: 80                          # <-- 3000 if you changed above
+            initialDelaySeconds: 5
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /
+              port: 80                          # <-- 3000 if you changed above
+            initialDelaySeconds: 15
+            periodSeconds: 20
+            timeoutSeconds: 2
+            failureThreshold: 3
+          resources:
+            requests:
+              cpu: "100m"
+              memory: "128Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
